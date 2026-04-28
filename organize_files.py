@@ -38,6 +38,7 @@ SCAN_PATHS = [
     Path(os.environ.get("USERPROFILE", "C:\\Users\\hp")) / "Documents",
     Path(os.environ.get("USERPROFILE", "C:\\Users\\hp")) / "Downloads",
     Path("C:\\Users\\Public"),
+    Path("D:\\"),
 ]
 
 OUTPUT_ROOT = Path(os.environ.get("USERPROFILE", "C:\\Users\\hp")) / "Desktop" / "文件迁移整理"
@@ -62,11 +63,8 @@ SKIP_EXTS = {
     ".sys", ".dll", ".exe", ".msi", ".drv", ".inf", ".cat",
     ".tmp", ".temp", ".bak", ".swp", ".swo",
     ".cache", ".log",
-    ".crx", ".xpi",
-    ".xml", ".lnk", ".ink", ".va", ".vr", ".dg", ".dt", ".fvr",
-    ".gif", ".pc", ".stm", ".ini", ".sv",
-    ".ls", ".tp", ".io", ".cm", ".kl",
-    ".plf", ".al16", ".zal16",
+    ".lnk", ".ink",
+    ".stm", ".fvr", ".plf", ".al16", ".zal16",
 }
 MIN_IMAGE_SIZE = 100 * 1024  # 100KB — 小于此的图片直接跳过
 
@@ -1206,6 +1204,7 @@ def main():
     parser.add_argument("--target", type=str, default="", help="目标磁盘路径 (如 E:\\\\ 或 auto)")
     parser.add_argument("--output", type=str, default="", help="自定义输出目录")
     parser.add_argument("--no-open", action="store_true", help="不自动打开输出目录")
+    parser.add_argument("--all-drives", action="store_true", help="扫描所有可用磁盘 (C/D/E/...)")
     args = parser.parse_args()
 
     # 解析 max_size
@@ -1280,7 +1279,16 @@ def main():
             print("  AI 深度感知: 已启用 (DeepSeek)")
         else:
             print("  警告: --ai 需要设置 DEEPSEEK_API_KEY 环境变量, 已跳过 AI 分析")
-    files = scan_files(SCAN_PATHS, max_size, use_ai=args.ai and bool(DEEPSEEK_API_KEY))
+    # --all-drives: 动态构建扫描路径
+    scan_paths = list(SCAN_PATHS)
+    if args.all_drives:
+        for letter in "DEFGHIJKLMNOPQRSTUVWXYZ":
+            drive = Path(f"{letter}:\\")
+            if drive.exists() and drive != target_drive:
+                scan_paths.append(drive)
+                print(f"  + 扫描 {letter}:\\")
+
+    files = scan_files(scan_paths, max_size, use_ai=args.ai and bool(DEEPSEEK_API_KEY))
 
     # 1.5 去重
     print()
@@ -1343,6 +1351,20 @@ def main():
     # 3. 预览目录树
     print("[3/5] 目标目录结构预览:")
     print()
+
+    # 源目录汇总
+    src_dir_count = Counter()
+    for f in files:
+        src = os.path.dirname(f.path)
+        src_dir_count[src] += 1
+    print("  源目录分布 TOP 20:")
+    for src, cnt in src_dir_count.most_common(20):
+        # 取最后2层路径
+        parts = Path(src).parts
+        short = ".../" + "/".join(parts[-2:]) if len(parts) >= 2 else src
+        print(f"    {cnt:>6,} 个  {short}")
+    print()
+
     file_groups = _build_file_groups(files)
     tree = {}
     grouped_display = {}  # key -> {group_name: [files]}
@@ -1374,7 +1396,11 @@ def main():
             print(f"      [{gname}/]  ({ginfo['count']} 个文件, {format_size(ginfo['size'])})")
         # 显示非组文件
         for fi in info["ungrouped"][:5]:
-            print(f"      {fi.name}  ({format_size(fi.size)})")
+            src_dir = os.path.dirname(fi.path)
+            # 缩短路径显示，只保留最后两级
+            parts = Path(src_dir).parts
+            short_src = "/".join(parts[-2:]) if len(parts) >= 2 else src_dir
+            print(f"      {fi.name}  ({format_size(fi.size)})  ← {short_src}")
         remaining = len(info["ungrouped"]) - 5
         if remaining > 0:
             print(f"      ... 还有 {remaining} 个文件")
@@ -1421,7 +1447,10 @@ def main():
             info = tree[key]
             print(f"\n  {key}/ ({info['count']} 个, {format_size(info['size'])})")
             for fi in info["files"][:10]:
-                print(f"    {fi.name}  ({format_size(fi.size)})")
+                src_dir = os.path.dirname(fi.path)
+                parts = Path(src_dir).parts
+                short_src = "/".join(parts[-2:]) if len(parts) >= 2 else src_dir
+                print(f"    {fi.name}  ({format_size(fi.size)})  ← {short_src}")
             if info["count"] > 10:
                 print(f"    ... 还有 {info['count'] - 10} 个")
             ans = input(f"  拷贝此目录? (Y/n, 回车=Y): ").strip().lower() or "y"
